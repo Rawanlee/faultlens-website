@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="570" height="200" viewBox="0 0 570 200"><rect width="570" height="200" fill="#0F1720"/><g transform="translate(20 36) scale(2)">
+    <rect width="64" height="64" rx="15" fill="#0F1720"/>
+    <circle cx="28" cy="28" r="15" fill="none" stroke="#FFB224" stroke-width="5"/>
+    <path d="M20.5 21.5 L27.5 28 L24 31 L32 37.5" fill="none" stroke="#F6F4EF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M39.5 39.5 L50 50" stroke="#FFB224" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="50.5" cy="15" r="4" fill="#19A974"/>
+  </g><text x="176" y="131" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="92" font-weight="700" letter-spacing="-2.76" fill="#F6F4EF">fault<tspan fill="#FFB224">lens</tspan></text></svg>

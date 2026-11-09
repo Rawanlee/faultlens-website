@@ -1,0 +1,199 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Faultlens website forms: HTTP API (API Gateway) -> Lambda -> Amazon SES email to the Faultlens inbox.",
+  "Parameters": {
+    "ToEmail": {
+      "Type": "String",
+      "Default": "shalom@faultlens.space",
+      "Description": "Inbox that receives form submissions"
+    },
+    "FromEmail": {
+      "Type": "String",
+      "Default": "shalom@faultlens.space",
+      "Description": "Sender address. Must be verified in Amazon SES in this region (or its domain verified)."
+    },
+    "AllowedOrigins": {
+      "Type": "CommaDelimitedList",
+      "Default": "https://www.faultlens.space,https://faultlens.space",
+      "Description": "Website origins allowed to submit forms"
+    }
+  },
+  "Resources": {
+    "FormFunctionRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "SendFormEmail",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ses:SendEmail"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "ses:FromAddress": {
+                        "Ref": "FromEmail"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "FormFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Description": "Validates Faultlens website form submissions and emails them via SES",
+        "Runtime": "nodejs22.x",
+        "Handler": "index.handler",
+        "Timeout": 10,
+        "MemorySize": 256,
+        "Role": {
+          "Fn::GetAtt": [
+            "FormFunctionRole",
+            "Arn"
+          ]
+        },
+        "Environment": {
+          "Variables": {
+            "TO_EMAIL": {
+              "Ref": "ToEmail"
+            },
+            "FROM_EMAIL": {
+              "Ref": "FromEmail"
+            },
+            "ALLOWED_ORIGINS": {
+              "Fn::Join": [
+                ",",
+                {
+                  "Ref": "AllowedOrigins"
+                }
+              ]
+            }
+          }
+        },
+        "Code": {
+          "ZipFile": "// Faultlens form handler — AWS Lambda (Node.js 22, CommonJS).\n// Receives JSON from the website's Get started and Contact forms and emails it\n// to the Faultlens inbox through Amazon SES. Configured by environment variables:\n//   TO_EMAIL         inbox that receives submissions (shalom@faultlens.space)\n//   FROM_EMAIL       SES-verified sender (shalom@faultlens.space or a domain address)\n//   ALLOWED_ORIGINS  comma-separated list of site origins allowed to post\n'use strict'\n\nconst EMAIL_RE = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/\nconst FORMS = {\n  'Get started': ['name', 'email', 'size', 'useCase'],\n  Contact: ['name', 'email', 'topic', 'message'],\n}\nconst LABELS = { name: 'Full name', email: 'Email', company: 'Company or property', size: 'I am a', useCase: 'What needs fixing', topic: 'Topic', message: 'Message', page: 'Page', submittedAt: 'Submitted at' }\nconst MAX_FIELD = 2000\n\nlet sendEmail = async (params) => {\n  const { SESv2Client, SendEmailCommand } = require('@aws-sdk/client-sesv2')\n  const client = new SESv2Client({})\n  return client.send(new SendEmailCommand(params))\n}\nexports._setSender = (fn) => { sendEmail = fn } // test hook\n\nconst allowed = () => (process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean)\n\nfunction corsHeaders(origin) {\n  const ok = origin && allowed().includes(origin)\n  return {\n    'Content-Type': 'application/json',\n    ...(ok ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}),\n  }\n}\nconst reply = (status, body, origin) => ({ statusCode: status, headers: corsHeaders(origin), body: JSON.stringify(body) })\nconst clean = (v) => String(v ?? '').replace(/\\r/g, '').trim().slice(0, MAX_FIELD)\n\nexports.handler = async (event) => {\n  const headers = Object.fromEntries(Object.entries(event.headers || {}).map(([k, v]) => [k.toLowerCase(), v]))\n  const origin = headers.origin\n  const method = event.requestContext?.http?.method || event.httpMethod\n\n  if (method === 'OPTIONS') return reply(204, {}, origin)\n  if (method !== 'POST') return reply(405, { error: 'Method not allowed' }, origin)\n  if (!origin || !allowed().includes(origin)) return reply(403, { error: 'Origin not allowed' }, origin)\n\n  let data\n  try {\n    const raw = event.isBase64Encoded ? Buffer.from(event.body || '', 'base64').toString('utf8') : event.body\n    if ((raw || '').length > 20000) return reply(413, { error: 'Payload too large' }, origin)\n    data = JSON.parse(raw || '{}')\n  } catch {\n    return reply(400, { error: 'Invalid JSON' }, origin)\n  }\n\n  // Honeypot: real visitors never see or fill this field. Pretend success to bots.\n  if (clean(data._gotcha)) return reply(200, { ok: true }, origin)\n\n  const form = clean(data.form)\n  const required = FORMS[form]\n  if (!required) return reply(400, { error: 'Unknown form' }, origin)\n\n  const fields = {}\n  for (const key of Object.keys(LABELS)) if (data[key] != null) fields[key] = clean(data[key])\n  const missing = required.filter((k) => !fields[k])\n  if (missing.length) return reply(422, { error: `Missing: ${missing.join(', ')}` }, origin)\n  if (!EMAIL_RE.test(fields.email)) return reply(422, { error: 'Invalid email address' }, origin)\n\n  const lines = Object.entries(fields).map(([k, v]) => `${LABELS[k]}: ${v}`)\n  const subject = `[Faultlens] ${form} — ${fields.name}`.replace(/[\\n]/g, ' ').slice(0, 150)\n\n  try {\n    await sendEmail({\n      FromEmailAddress: process.env.FROM_EMAIL,\n      Destination: { ToAddresses: [process.env.TO_EMAIL] },\n      ReplyToAddresses: [fields.email],\n      Content: { Simple: { Subject: { Data: subject }, Body: { Text: { Data: `New ${form} submission from faultlens.space\\n\\n${lines.join('\\n')}\\n` } } } },\n    })\n  } catch (err) {\n    console.error('SES send failed', err)\n    return reply(502, { error: 'Could not send message' }, origin)\n  }\n  console.log(JSON.stringify({ event: 'form_submission', form }))\n  return reply(200, { ok: true }, origin)\n}\n"
+        }
+      }
+    },
+    "FormFunctionLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${FormFunction}"
+        },
+        "RetentionInDays": 30
+      }
+    },
+    "FormApi": {
+      "Type": "AWS::ApiGatewayV2::Api",
+      "Properties": {
+        "Name": "faultlens-forms",
+        "ProtocolType": "HTTP",
+        "CorsConfiguration": {
+          "AllowOrigins": {
+            "Ref": "AllowedOrigins"
+          },
+          "AllowMethods": [
+            "POST",
+            "OPTIONS"
+          ],
+          "AllowHeaders": [
+            "content-type",
+            "accept"
+          ],
+          "MaxAge": 600
+        }
+      }
+    },
+    "FormIntegration": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Properties": {
+        "ApiId": {
+          "Ref": "FormApi"
+        },
+        "IntegrationType": "AWS_PROXY",
+        "IntegrationUri": {
+          "Fn::GetAtt": [
+            "FormFunction",
+            "Arn"
+          ]
+        },
+        "PayloadFormatVersion": "2.0"
+      }
+    },
+    "FormRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "FormApi"
+        },
+        "RouteKey": "POST /contact",
+        "Target": {
+          "Fn::Sub": "integrations/${FormIntegration}"
+        }
+      }
+    },
+    "FormStage": {
+      "Type": "AWS::ApiGatewayV2::Stage",
+      "Properties": {
+        "ApiId": {
+          "Ref": "FormApi"
+        },
+        "StageName": "$default",
+        "AutoDeploy": true,
+        "DefaultRouteSettings": {
+          "ThrottlingBurstLimit": 5,
+          "ThrottlingRateLimit": 1
+        }
+      }
+    },
+    "FormInvokePermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "FormFunction"
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${FormApi}/*/*/contact"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "FormEndpoint": {
+      "Description": "Set this as VITE_FORM_ENDPOINT in the website hosting environment",
+      "Value": {
+        "Fn::Sub": "https://${FormApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/contact"
+      }
+    }
+  }
+}

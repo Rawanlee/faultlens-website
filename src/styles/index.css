@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #0F1720;
+  --color-ink-2: #18222E;
+  --color-ink-3: #223040;
+  --color-line: #2A3644;
+  --color-paper: #F6F4EF;
+  --color-paper-2: #ECE8DF;
+  --color-amber: #FFB224;
+  --color-amber-deep: #C97A00;
+  --color-fix: #19A974;
+  --color-fix-deep: #0E7A52;
+  --color-muted: #5B6675;
+  --color-mist: #9AA6B4;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+html { scroll-behavior: smooth; scroll-padding-top: 5rem; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+body { @apply bg-paper text-ink font-sans antialiased; }
+h1, h2, h3, .font-display { font-family: var(--font-display); letter-spacing: -0.02em; }
+
+.container-x { @apply mx-auto w-full max-w-7xl px-5 sm:px-8; }
+.eyebrow { @apply inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em]; }
+.grid-bg {
+  background-image: linear-gradient(to right, rgb(42 54 68 / 0.35) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(42 54 68 / 0.35) 1px, transparent 1px);
+  background-size: 36px 36px;
+}
+.focus-ring { @apply focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber; }
+
+.js .reveal { opacity: 0; transform: translateY(14px); transition: opacity .6s ease, transform .6s ease; }
+.js .reveal.is-visible { opacity: 1; transform: none; }
+
+@keyframes scan { 0% { transform: translateY(-100%); } 100% { transform: translateY(100%); } }
+.scanline { animation: scan 2.4s linear infinite; }
+@keyframes pulse-dot { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+.pulse-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
